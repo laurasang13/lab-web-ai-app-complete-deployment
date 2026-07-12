@@ -1,0 +1,170 @@
+import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../../context/AuthContext'
+import { useMascota } from '../../context/MascotaContext'
+import { useLanguage } from '../../hooks/useLanguage'
+import styles from './HomePage.module.css'
+import Navbar from '../../components/Navbar/Navbar'
+import { useState, useEffect } from 'react'
+import PesoChart from '../../components/PesoChart/PesoChart'
+import MenuCard from '../../components/MenuCard/MenuCard'
+import { useUI } from '../../context/UIContext'
+import WeatherAlert from '../../components/WeatherAlert/WeatherAlert'
+import TratamientoAlert from '../../components/TratamientoAlert/TratamientoAlert'
+import { MdPets, MdWarning, MdSmartToy, MdTrendingUp, MdLanguage, MdLogout } from 'react-icons/md'
+import { CiHospital1 } from 'react-icons/ci'
+import { PiChefHatLight, PiCookingPot, PiStethoscopeDuotone  } from "react-icons/pi";
+import { TbAlertTriangle } from "react-icons/tb";
+
+
+export default function HomePage() {
+  const navigate = useNavigate()
+  const { usuario, logout } = useAuth()
+  
+  const { lang, t, toggleLang } = useLanguage()
+  const { mascotas, mascotaActiva, setMascotaActiva, fetchPlanes, eliminarPlan } = useMascota()
+  const handleLogout = () => {
+    logout()
+    navigate('/')
+  }
+
+  const [planes, setPlanes] = useState([])
+
+  useEffect(() => {
+    if (mascotaActiva) {
+      fetchPlanes(mascotaActiva.id).then(data => setPlanes(data.slice(0, 3)))
+    }
+  }, [mascotaActiva])
+
+  const handleDeletePlan = async (id) => {
+    await eliminarPlan(id)
+    setPlanes(prev => prev.filter(p => p.id !== id))
+  }
+
+  const { pesoModal, setPesoModal } = useUI()
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  return (
+    <div className={styles.container}>
+      <header className={styles.header}>
+        <img src="/Kahu_Logo_transparente.png" alt="Kahu" className={styles.logo} />
+        <div className={styles.headerRight}>
+          <div className={styles.hamburgerWrapper}>
+            <button className={styles.hamburgerBtn} onClick={() => setMenuOpen(v => !v)} aria-label="Menú">
+              <span className={`${styles.bar} ${menuOpen ? styles.barTop : ''}`} />
+              <span className={`${styles.bar} ${menuOpen ? styles.barMid : ''}`} />
+              <span className={`${styles.bar} ${menuOpen ? styles.barBot : ''}`} />
+            </button>
+            {menuOpen && (
+              <>
+                <div className={styles.menuOverlay} onClick={() => setMenuOpen(false)} />
+                <div className={styles.dropdown}>
+                  <button className={styles.dropdownItem} onClick={() => { toggleLang(); setMenuOpen(false) }}>
+                    <MdLanguage /> {lang === 'es' ? 'English' : 'Español'}
+                  </button>
+                  <div className={styles.dropdownDivider} />
+                  <button className={styles.dropdownItem} onClick={handleLogout}>
+                    <MdLogout /> {t.logout}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <main className={styles.main}>
+        <div className={styles.greeting}>
+          <h1 className={styles.title}>{t.hello}, {usuario?.nombre} </h1>
+          <p className={styles.subtitle}>{t.homeSubtitle}</p>
+        </div>
+
+        {mascotas.length > 0 ? (
+          <>
+            <div className={styles.petsSection}>
+              <h2 className={styles.sectionTitle}>{t.myPets}</h2>
+              <div className={styles.petsList}>
+                {mascotas.map(m => (
+                  <div
+                    key={m.id}
+                    className={`${styles.petCard} ${mascotaActiva?.id === m.id ? styles.petActive : ''}`}
+                    onClick={() => setMascotaActiva(m)}
+                  >
+                    <MdPets className={styles.petEmoji} />
+                    <div>
+                      <div className={styles.petName}>{m.nombre}</div>
+                      <div className={styles.petBreed}>{m.raza}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {mascotaActiva && (
+              <div className={styles.activeCard}>
+                <div className={styles.activeInfo}>
+                  <h3 className={styles.activeName}>{mascotaActiva.nombre}</h3>
+                  <p className={styles.activeMeta}>{mascotaActiva.raza} · {mascotaActiva.peso_kg}kg · {mascotaActiva.edad_meses} {t.months}</p>
+                  {mascotaActiva.alergias && <p className={styles.activeAllergy}><TbAlertTriangle /> {t.allergies}: {mascotaActiva.alergias}</p>}
+                </div>
+                <button className={styles.chatBtn} onClick={() => navigate('/chat')}>
+                  <PiChefHatLight /> {t.chatWithKahu}
+                </button>
+                <button className={styles.vetBtn} onClick={() => navigate(`/historial/${mascotaActiva.id}`)}>
+                  <PiStethoscopeDuotone /> Historial veterinario
+                </button>
+              </div>
+            )}
+            {mascotaActiva && (
+              <WeatherAlert
+                ciudad={usuario?.ciudad || 'Madrid'}
+                nombreMascota={mascotaActiva.nombre}
+              />
+            )}
+            {mascotaActiva && (
+              <TratamientoAlert
+                mascotaId={mascotaActiva.id}
+                nombreMascota={mascotaActiva.nombre}
+              />
+            )}
+          </>
+        ) : (
+          <div className={styles.emptyState}>
+            <MdPets className={styles.emptyEmoji} />
+            <p className={styles.emptyText}>{t.noPets}</p>
+            <button className={styles.addBtn} onClick={() => navigate('/newpet')}>{t.addPet}</button>
+          </div>
+        )}
+
+        
+        {planes.length > 0 && (
+          <div className={styles.section}>
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle}>Últimos menús</h2>
+              <button className={styles.seeAll} onClick={() => navigate(`/menus/${mascotaActiva.id}`)}>
+                Ver todos
+              </button>
+            </div>
+            <div className={styles.menusList}>
+              {planes.map(plan => (
+                <MenuCard key={plan.id} plan={plan} onDelete={handleDeletePlan} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {mascotaActiva && (
+          <div className={styles.section}>
+            <h2 className={styles.sectionTitle}><MdTrendingUp /> Evolución del peso</h2>
+            <div className={styles.chartCard}>
+              <PesoChart mascotaId={mascotaActiva.id} readOnly />
+            </div>
+          </div>
+        )}
+
+      </main>
+
+
+      <Navbar />
+    </div>
+  )
+}
