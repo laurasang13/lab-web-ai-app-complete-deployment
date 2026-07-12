@@ -1,290 +1,277 @@
-![logo_ironhack_blue 7](https://user-images.githubusercontent.com/23629340/40541063-a07a0a8a-601a-11e8-91b5-2f13e4e6b441.png)
+![Kahu](./frontend/public/Kahu_Logo_transparente.png)
 
-# Lab | Despliegue Completo de la App IA
+Kahu es una app web fullstack para dueños de perros que siguen dieta BARF o dieta casera cocinada. El usuario registra su mascota y chatea con un agente IA que calcula recetas y porciones personalizadas según peso, raza, edad, alergias, tipo de dieta y número de tomas al día.
 
-## Objetivo
+---
 
-<!-- Desplegar la app construida en D1, D2 y D4 — backend FastAPI en Railway y frontend React en Netlify — de forma que funcione con URL pública y el agente IA responda en producción. -->
+## Stack
 
-Desplegar la app construida en los días anteriores — backend FastAPI en Railway y frontend React en Netlify — de forma que funcione con URL pública y el agente IA responda en producción.
+**Frontend** — React 18 + Vite + React Router v6, Context API, CSS Modules, diseño mobile-first
 
-Al finalizar tendrás:
-- Una URL pública para el backend (Railway)
-- Una URL pública para el frontend (Netlify)
-- CI/CD básico con GitHub Actions
-- Al menos 3 tests que corren en el pipeline
-- Variables de entorno gestionadas correctamente (sin credenciales en el código)
+**Backend Node** — Node.js + Express, Prisma ORM, PostgreSQL, JWT, bcrypt, express-validator
 
-## Punto de partida
+**Backend IA** — FastAPI + LangGraph + LangChain, RAG con ChromaDB, Groq (llama-3.3-70b-versatile), FastEmbed
 
-La app del D4:
-```shell
-lab-web-ai-app-complete-deployment/
-├── backend/       ← FastAPI + LangGraph + PostgreSQL + CORS
-└── frontend/      ← React + Chat + JWT
+**Automatización** — N8N (workflow PDF + email al generar un plan nutricional)
+
+**Deploy** — Vercel (frontend) + Render (backends) + Neon (PostgreSQL en cloud)
+
+---
+
+## Arquitectura
+
+```
+┌─────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│   Frontend  │────▶│  Backend Node   │────▶│   PostgreSQL     │
+│  React+Vite │     │  Express+Prisma │     │   (Neon/Local)   │
+└──────┬──────┘     └─────────────────┘     └──────────────────┘
+       │
+       │            ┌─────────────────┐     ┌──────────────────┐
+       └───────────▶│  Backend IA     │────▶│   ChromaDB       │
+                    │  FastAPI +      │     │   (vectorstore)  │
+                    │  LangGraph+RAG  │     └──────────────────┘
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │   Groq API      │
+                    │ llama-3.3-70b   │
+                    └─────────────────┘
 ```
 
-## Fase 1 — Preparar el backend para producción
+---
 
-### 1.1 Dockerfile
+## Estructura del proyecto
 
-Crea `backend/Dockerfile`:
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+kahu-app/
+├── backend-ai/          FastAPI + LangGraph + RAG
+│   ├── app/
+│   │   ├── agent/       Grafo LangGraph, tools, prompts
+│   │   ├── rag/         ChromaDB, loaders, embeddings
+│   │   └── api/         Endpoints FastAPI
+│   ├── docs/            5 documentos RAG indexados
+│   └── ingest.py        Script de indexación (ejecutar una vez)
+├── backend-node/        Node.js + Prisma + JWT
+│   ├── src/
+│   │   ├── controllers/
+│   │   ├── routes/
+│   │   ├── middleware/
+│   │   └── schemas/
+│   └── prisma/
+│       ├── schema.prisma
+│       ├── migrations/
+│       └── seed.js
+├── frontend/            React 18 + Vite
+│   └── src/
+│       ├── components/
+│       ├── context/
+│       ├── hooks/
+│       ├── pages/
+│       └── services/
+├── n8n/                 Workflow exportado PDF + Email
+├── API.md               Documentación de endpoints
+└── kahu-api.postman_collection.json
 ```
 
-**Importante**: Railway inyecta la variable `$PORT`. Actualiza el `CMD`:
-```dockerfile
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
-```
+---
 
-### 1.2 .dockerignore
+## Instalación
 
-```shell
-.env
-.env.*
-__pycache__/
-*.pyc
-.venv/
-venv/
-chroma_db/
-*.sqlite
-tests/
-.git/
-```
+### Requisitos previos
+- Node.js 18+
+- Python 3.11+
+- PostgreSQL corriendo en local
 
-### 1.3 Verificar que el puerto usa $PORT
+### Backend Node
 
-```python
-# Verificar en main.py que ALLOWED_ORIGINS viene de variable de entorno
-ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
-```
-
-### 1.4 .env.example (subir al repositorio)
-
-```shell
-OPENAI_API_KEY=
-DATABASE_URL=
-ALLOWED_ORIGINS=http://localhost:5173
-SECRET_KEY=
-DEMO_TOKEN=
-```
-
-## Fase 2 — CI/CD con GitHub Actions
-
-Crea `.github/workflows/ci.yml`:
-
-```yaml
-name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Instalar dependencias
-        run: pip install -r backend/requirements.txt pytest httpx
-
-      - name: Ejecutar tests
-        env:
-          OPENAI_API_KEY: "fake-key-for-tests"
-          DATABASE_URL: "sqlite:///./test.db"
-          DEMO_TOKEN: "demo-token-12345"
-        run: pytest backend/tests/ -v --tb=short
-```
-
-## Fase 3 — Escribir los tests
-
-Crea al menos 3 tests en `backend/tests/`:
-
-```python
-# backend/tests/conftest.py
-import os
-import pytest
-
-@pytest.fixture(autouse=True)
-def env_vars(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///./test.db")
-    monkeypatch.setenv("DEMO_TOKEN", "demo-token-12345")
-```
-
-```python
-# backend/tests/test_api.py
-from unittest.mock import AsyncMock, patch, MagicMock
-from fastapi.testclient import TestClient
-from main import app
-
-client = TestClient(app)
-HEADERS = {"Authorization": "Bearer demo-token-12345"}
-
-def test_health():
-    res = client.get("/health")
-    assert res.status_code == 200
-
-def test_chat_sin_token_rechazado():
-    res = client.post("/api/chat", json={"message": "Hola"})
-    assert res.status_code in (401, 403)
-
-def test_chat_con_token_y_llm_mockeado():
-    respuesta_falsa = {"messages": [MagicMock(content="Respuesta mockeada")]}
-    with patch("main.agente") as mock_agente:
-        mock_agente.ainvoke = AsyncMock(return_value=respuesta_falsa)
-        res = client.post(
-            "/api/chat",
-            json={"message": "Hola", "session_id": "test"},
-            headers=HEADERS,
-        )
-    assert res.status_code == 200
-    assert "response" in res.json()
-```
-
-Verifica que los tests pasan localmente:
 ```bash
-pytest backend/tests/ -v
+cd backend-node
+npm install
+cp .env.example .env
+# Rellena las variables de entorno
+npx prisma migrate dev
+npx prisma db seed
+npm run dev
 ```
 
-## Fase 4 — Deploy del backend en Railway
+La API estará disponible en `http://localhost:3001`.
 
-1. Sube todos los cambios a GitHub:
-   ```bash
-   git add .
-   git commit -m "feat: preparar para deploy (Docker, CI, tests)"
-   git push origin main
-   ```
+### Backend IA
 
-2. En [railway.app](https://railway.app):
-   - `New Project → Deploy from GitHub repo`
-   - Selecciona tu repositorio
-   - **Root Directory**: `backend`
-
-3. Añade PostgreSQL:
-   - `+ New → Database → Add PostgreSQL`
-   - Railway añade `DATABASE_URL` automáticamente al servicio
-
-4. Añade las variables:
-   ```shell
-   OPENAI_API_KEY = sk-proj-...
-   SECRET_KEY = # (genera con: python -c "import secrets; print(secrets.token_hex(32))")
-   DEMO_TOKEN = # (genera con: python -c "import secrets; print(secrets.token_hex(16))")
-   ```
-   Deja `ALLOWED_ORIGINS` para cuando tengas la URL de Netlify.
-
-5. Genera un dominio público:
-   `Settings → Domains → Generate Domain`
-
-6. Verifica:
-   
-   ```shell
-   curl https://mi-backend.railway.app/health
-   
-   # → {"status": "ok"}
-   ```
-
-## Fase 5 — Deploy del frontend en Netlify
-
-1. En [netlify.com](https://netlify.com):
-   - `Add new site → Import an existing project`
-   - Elige GitHub → tu repositorio
-   - **Base directory**: `frontend`
-   - **Build command**: `npm run build`
-   - **Publish directory**: `frontend/dist`
-
-2. Añade la variable de entorno:
-   ```shell
-   VITE_API_URL = https://mi-backend.railway.app
-   ```
-
-3. Crea `frontend/public/_redirects` para React Router:
-   ```shell
-   /*    /index.html   200
-   ```
-
-4. Sube el cambio y espera el redeploy:
-   ```shell
-   git add frontend/public/_redirects
-   git commit -m "fix: netlify redirects for SPA routing"
-   git push
-   ```
-
-## Fase 6 — Conectar ambas apps
-
-Vuelve a Railway y actualiza la variable:
-```shell
-ALLOWED_ORIGINS = https://tu-app.netlify.app
+```bash
+cd backend-ai
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# Rellena las variables de entorno con tu GROQ_API_KEY
+python ingest.py   # Solo la primera vez — indexa los documentos RAG
+uvicorn app.main:app --reload --port 8000
 ```
 
-Railway hará redeploy automático.
+El servidor IA estará disponible en `http://localhost:8000`.
 
-## Verificación end-to-end
+### Frontend
 
-Abre `https://tu-app.netlify.app` y comprueba:
-
-- [ ] Redirige a `/login` (ruta protegida)
-- [ ] Login con credenciales de prueba → redirige al chat
-- [ ] El chat responde (el agente LangGraph funciona en Railway)
-- [ ] Recarga en `/chat` → no da 404 (el `_redirects` funciona)
-- [ ] Abre DevTools → Network → las peticiones van a `railway.app` (no a localhost)
-- [ ] GitHub Actions muestra el pipeline verde en la pestaña Actions
-
-## Entrega
-
-```shell
-lab-web-ai-app-complete-deployment/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── backend/
-│   ├── Dockerfile
-│   ├── .dockerignore
-│   ├── .env.example
-│   ├── main.py
-│   ├── requirements.txt
-│   └── tests/
-│       ├── conftest.py
-│       └── test_api.py
-└── frontend/
-    ├── public/
-    │   └── _redirects
-    ├── .env.example
-    └── src/
+```bash
+cd frontend
+npm install
+cp .env.example .env
+# Rellena las variables de entorno
+npm run dev
 ```
 
-## Checklist de entrega
+La app estará disponible en `http://localhost:5173`.
 
-- [ ] `backend/Dockerfile` usa `${PORT:-8000}` (no hardcoded 8000)
-- [ ] `.dockerignore` excluye `.env` y `chroma_db/`
-- [ ] `.env.example` documenta todas las variables necesarias
-- [ ] Al menos 3 tests en `backend/tests/` que no necesitan API key real
-- [ ] GitHub Actions ejecuta los tests en cada push (pestaña Actions verde)
-- [ ] Backend desplegado en Railway con URL pública que responde a `/health`
-- [ ] Frontend desplegado en Netlify con `VITE_API_URL` apuntando a Railway
-- [ ] El chat funciona de extremo a extremo en producción
-- [ ] Las credenciales NO están en el repositorio (`.env` en `.gitignore`)
-- [ ] El `_redirects` de Netlify hace que React Router funcione en producción
+> Asegúrate de tener los tres servidores corriendo para que la app funcione completa.
 
-## Bonus
+---
 
-- Configura el deploy automático a Railway desde GitHub Actions (usando el token de Railway como secreto)
-- Añade un test de prompt injection: verifica que un mensaje con "ignora instrucciones" devuelve 400
-- Implementa JWT real en el backend (en lugar del token estático) y actualiza el flujo de login en React
+## Variables de entorno
+
+Las variables necesarias están documentadas en los archivos `.env.example` de cada carpeta. Cópialos y rellena con tus credenciales reales.
+
+| Carpeta | Variables principales |
+|---------|----------------------|
+| `backend-node` | `DATABASE_URL`, `JWT_SECRET`, `INTERNAL_SERVICE_TOKEN` |
+| `backend-ai` | `GROQ_API_KEY`, `NODE_BACKEND_URL`, `INTERNAL_SERVICE_TOKEN` |
+| `frontend` | `VITE_API_NODE_URL`, `VITE_API_AI_URL` |
+
+---
+
+## API — Recursos principales
+
+| Recurso | Ruta base | Backend |
+|---------|-----------|---------|
+| Auth | `/api/auth` | Node |
+| Mascotas | `/api/mascotas` | Node |
+| Planes nutricionales | `/api/planes` | Node |
+| Historial veterinario | `/api/historial-vet` | Node |
+| Chat historial | `/api/chat` | Node |
+| Registro de peso | `/api/peso` | Node |
+| Chat con agente IA | `/api/chat` | FastAPI |
+
+Todos los endpoints de Node (excepto `/api/auth/register` y `/api/auth/login`) requieren token JWT en el header `Authorization: Bearer <token>`.
+
+Ver `API.md` para documentación completa y `kahu-api.postman_collection.json` para importar en Postman.
+
+---
+
+## Base de datos
+
+7 tablas relacionadas:
+
+- **Usuario** — perfil, credenciales, ciudad, rol (USER / ADMIN)
+- **Mascota** — datos del perro (raza, peso, edad, alergias, tipo de dieta, tomas)
+- **PlanNutricional** — planes generados por el agente IA
+- **HistorialVeterinario** — visitas veterinarias (fecha, motivo, descripción, próxima cita)
+- **ChatHistorial** — historial de conversaciones con el agente por mascota
+- **RegistroPeso** — evolución del peso a lo largo del tiempo
+- **Tratamiento** — tratamientos recurrentes (vacunas, antiparasitarios, medicamentos) con frecuencia en días, última dosis y próxima dosis calculada automáticamente
+
+---
+
+## Agente IA
+
+El agente usa **LangGraph** con RAG sobre 5 documentos especializados en nutrición canina:
+
+1. Tabla maestra de alimentos permitidos y prohibidos
+2. Cálculo de porciones y raciones BARF
+3. Guía completa BARF vs dieta cocinada
+4. Cuidados por etapa de vida (cachorro, adulto, senior)
+5. Adiestramiento en positivo
+
+### Tools disponibles
+- `registrar_receta` → guarda el plan en `PlanNutricional`
+- `actualizar_registro_vet` → guarda eventos en `HistorialVeterinario`
+
+---
+
+## Roles
+
+**USER** — puede registrar mascotas, chatear con el agente IA, ver y eliminar sus planes nutricionales, registrar el peso de su mascota y gestionar el historial veterinario.
+
+**ADMIN** — acceso completo. Puede gestionar todos los usuarios y recursos de la plataforma.
+
+---
+
+## Funcionalidades
+
+- Registro, login y logout con JWT
+- Soporte multi-mascota — varias mascotas por usuario, cambio de activa desde el home
+- Perfil de mascota editable (raza, peso, edad, alergias, tipo de dieta, tomas al día)
+- Chat con agente IA especializado en nutrición canina BARF y cocinada
+- El agente muestra el plan antes de guardarlo y pide confirmación
+- Historial de chat persistido en PostgreSQL por mascota
+- Planes nutricionales guardados con calorías, ingredientes y proporciones
+- Descarga del plan nutricional por email vía workflow N8N
+- Gráfico de evolución de peso con registro histórico
+- Historial veterinario con UI completa — registro de visitas, motivo, descripción y próxima cita
+- Gestión de tratamientos recurrentes (vacunas, antiparasitarios, medicamentos) con cálculo automático de próxima dosis
+- Alertas de tratamientos atrasados o próximos directamente en el home
+- Alerta meteorológica en tiempo real según la ciudad del usuario (OpenWeatherMap) con niveles de riesgo para el paseo
+- Soporte bilingüe (español / inglés)
+- Diseño mobile-first con navbar flotante
+- Rate limiting en endpoints de autenticación (10 intentos / 15 min)
+- Manejo centralizado de errores en ambos backends
+- Validaciones en cliente (React) y servidor (express-validator + Pydantic v2)
+
+---
+
+## Arrancar la app en local
+
+Necesitas tres terminales abiertas:
+
+**Terminal 1 — Backend Node:**
+```bash
+cd backend-node && npm run dev
+```
+
+**Terminal 2 — Backend IA:**
+```bash
+cd backend-ai && source .venv/bin/activate && uvicorn app.main:app --reload --port 8000
+```
+
+**Terminal 3 — Frontend:**
+```bash
+cd frontend && npm run dev
+```
+
+---
+
+## Usuarios de prueba (seed)
+
+| Nombre | Email | Password | Rol |
+|--------|-------|----------|-----|
+| KahuAdmin | admin@kahu.com | admin123 | ADMIN |
+| Patricia | patricia@test.com | test123 | USER |
+| Carlos | carlos@test.com | test123 | USER |
+| Ana | ana@test.com | test123 | USER |
+| Miguel | miguel@test.com | test123 | USER |
+| Sara | sara@test.com | test123 | USER |
+
+Mascotas de prueba con IDs `seed-mascota-0001` a `seed-mascota-0005` vinculadas a cada usuario.
+
+---
+
+## Deploy
+
+- Frontend → https://kahu-app-brown.vercel.app
+- Backend Node → https://kahu-backend-node.onrender.com
+- Backend IA → https://kahu-backend-ai.onrender.com
+- Base de datos → PostgreSQL en Neon (Frankfurt)
+
+---
+
+## Backlog
+
+- Migrar autenticación a httpOnly cookies (mejora de seguridad: elimina el riesgo de robo de token vía XSS en localStorage)
+- Chat diferenciado: un agente para nutrición y otro para cuidados y adiestramiento
+- Actualización de ciudad en el perfil del usuario (para la alerta meteorológica)
+- Modo offline con PWA
+- Vectorstore en Qdrant cloud para mejor escalabilidad
+- Notificaciones en tiempo real
+- Dashboard de administración
+- Recuperación de contraseña por email
+- Token refresh automático (actualmente el JWT expira a los 7 días y requiere nuevo login)
+
